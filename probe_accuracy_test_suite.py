@@ -57,6 +57,7 @@ class Probe():
         self.isKlippain = False
         self.isTap = False
         self.isBeacon = False
+        self.isKlickyKalico = False
 
         self._detect()
 
@@ -66,9 +67,13 @@ class Probe():
             or  self.isKlippain
             or  self.isTap
             or  self.isBeacon
+            or  self.isKlickyKalico
         )
 
     def lock(self, lock = True):
+        if self.isKlickyKalico:
+            self.printer.gcode("SET_DOCKABLE_PROBE AUTO_ATTACH_DETACH=0")
+            self.printer.gcode("ATTACH_PROBE")
         if self.isKlicky:
             self.printer.gcode("ATTACH_PROBE_LOCK")
         if self.isKlippain:
@@ -78,6 +83,9 @@ class Probe():
                 self.printer.gcode("ACTIVATE_PROBE")
 
     def unlock(self, unlock = False):
+        if self.isKlickyKalico:
+            self.printer.gcode("SET_DOCKABLE_PROBE AUTO_ATTACH_DETACH=1")
+            self.printer.gcode("DETACH_PROBE")
         if self.isKlicky:
             self.printer.gcode("DOCK_PROBE_UNLOCK")
         elif self.isKlippain:
@@ -86,13 +94,13 @@ class Probe():
             else:
                 self.printer.gcode("DEACTIVATE_PROBE")
 
-    def check_error(msg):
+    def check_error(self, msg):
         klicky_macro_issue = " ".join([
             "!! Error evaluating 'gcode_macro PROBE_ACCURACY:gcode':",
             "CommandError:",
             "Must perform PROBE_ACCURACY with the probe above the BED!"
         ])
-        if klicky_macro_issue == msgs:
+        if klicky_macro_issue == msg:
             print("This issue can be fixed by updating klicky-macros.cfg")
             print(
                 "Reference: https://github.com/jlas1/Klicky-Probe/commit/31a481c843567233c807bb310b6f0e83d60b4fca"
@@ -126,6 +134,14 @@ class Probe():
             pass
 
         try:
+            self.printer.config["dockable_probe"]
+            self.isKlickyKalico = True
+            print(f"{ CLEAR_LINE }Probe type: Klicky with Kalico detected")
+            return
+        except:
+            pass
+
+        try:
             backlash_comp = self.printer.config["idm"].get("backlash_comp", 0)
             #print(backlash_comp)
             if backlash_comp:
@@ -152,7 +168,7 @@ class Probe():
                         endstop_pin = self.printer.config["stepper_z"]["endstop_pin"]
                         #print(endstop_pin)
 
-                        if re.search("probe:\s*z_virtual_endstop", endstop_pin):
+                        if re.search("probe:\\s*z_virtual_endstop", endstop_pin):
                             self.isTap = True
                             print(f"{ CLEAR_LINE }Probe type: Tap mode detected")
                     except:
@@ -299,7 +315,7 @@ class Printer:
                     "gcode_macro _USER_VARIABLES",
                     "probe_min_z_travel"
                 )
-            elif self.probe.isTap:
+            elif self.probe.isTap or self.probe.isKlickyKalico:
                 self.safe_z = (
                     self.settings
                         .get("safe_z_home", {})
@@ -349,23 +365,18 @@ class Printer:
         #     #print(f"{corners_list}")
         # except:
         #     pass
-        try:
-            x_offset = self.config["probe"].get("x_offset", 0)
-            y_offset = self.config["probe"].get("y_offset", 0)
-        except:
-            try:
-                x_offset = self.config["idm"].get("x_offset", 0)
-                y_offset = self.config["idm"].get("y_offset", 0)
-            except:
-                try:
-                    x_offset = self.config["cartographer"].get("x_offset", 0)
-                    y_offset = self.config["cartographer"].get("y_offset", 0)
-                except:
-                    try:
-                        x_offset = self.config["beacon"].get("x_offset", 0)
-                        y_offset = self.config["beacon"].get("y_offset", 0)
-                    except:
-                            pass
+
+        x_offset = None
+        y_offset = None
+
+        for section in ["probe", "idm", "cartographer", "beacon", "dockable_probe"]:
+            if section in self.config:
+                x_offset = self.config[section].get("x_offset", 0)
+                y_offset = self.config[section].get("y_offset", 0)
+                break
+
+        if x_offset is None or y_offset is None:
+            raise ValueError("Could not find x_offset or y_offset in config")
 
 
         # print(f"x_offset{x_offset}\ny_offset{y_offset}")
@@ -700,7 +711,10 @@ class Test_suite():
         try:
             printer_config_drop_first = self.printer.config["probe"].get("drop_first_result")
         except:
-            printer_config_drop_first = False
+            try:
+                printer_config_drop_first = self.printer.config["dockable_probe"].get("drop_first_result")
+            except:
+                printer_config_drop_first = False
 
         if (
                 printer_config_drop_first # self.printer.config["probe"].get("drop_first_result") == "True"
